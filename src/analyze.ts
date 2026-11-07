@@ -1,46 +1,31 @@
-import { Project } from "ts-morph";
-import { relative, resolve } from "node:path";
+import { writeFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { analyzeRepository } from "./analyzer.js";
+import type { Codelands } from "./schema.js";
 
-// ---------- 1. Where to look ----------
-const ROOT = resolve(process.argv[2] ?? ".");
+const DEFAULT_OUTPUT = "codelands.json";
+const DEFAULT_COMMITS = 200;
 
-// ---------- 2. Load every TypeScript file (skip tests and type-only files) ----------
-const project = new Project({ skipAddingFilesFromTsConfig: true });
-project.addSourceFilesAtPaths([
-  `${ROOT}/src/**/*.ts`,
-  `!${ROOT}/src/**/*.test.ts`,
-  `!${ROOT}/src/**/*.d.ts`,
-]);
+const repositoryPath = resolve(process.argv[2] ?? ".");
+const outputPath = process.argv[3] ?? DEFAULT_OUTPUT;
 
-// ---------- 3. Measure each file ----------
-type FileFact = { path: string; lines: number; functions: number; imports: string[] };
+const report = await analyzeRepository(repositoryPath, DEFAULT_COMMITS);
+writeFileSync(outputPath, JSON.stringify(report, null, 2));
+printSummary(report, outputPath);
 
-const facts: FileFact[] = project.getSourceFiles().map((sf) => {
-  const path = relative(ROOT, sf.getFilePath());
+function printSummary(report: Codelands, outputPath: string): void {
+  const { stats, modules } = report;
+  const count = (predicate: (module: Codelands["modules"][number]) => boolean) =>
+    modules.filter(predicate).length;
+  const mostChanged = [...modules].sort((a, b) => b.churn - a.churn).slice(0, 5);
 
-  // Imports that point at another file inside this repo (not npm packages)
-  const imports = sf
-    .getImportDeclarations()
-    .map((imp) => imp.getModuleSpecifierSourceFile())
-    .filter((target) => target !== undefined)
-    .map((target) => relative(ROOT, target!.getFilePath()));
-
-  return {
-    path,
-    lines: sf.getEndLineNumber(),
-    functions: sf.getFunctions().length + sf.getClasses().length,
-    imports,
-  };
-});
-
-// ---------- 4. Print a summary ----------
-const totalLines = facts.reduce((n, f) => n + f.lines, 0);
-const totalImports = facts.reduce((n, f) => n + f.imports.length, 0);
-
-console.log(`files:   ${facts.length}`);
-console.log(`lines:   ${totalLines}`);
-console.log(`imports: ${totalImports} (internal, file-to-file)`);
-console.log(`\nbiggest modules:`);
-for (const f of [...facts].sort((a, b) => b.lines - a.lines).slice(0, 10)) {
-  console.log(`  ${String(f.lines).padStart(5)}  ${f.path}  (${f.imports.length} imports)`);
+  console.log(`wrote ${outputPath}`);
+  console.log(`modules: ${stats.modules}  lines: ${stats.lines}  imports: ${stats.imports}  commits: ${stats.commitsAnalyzed}`);
+  console.log(`entry points: ${count((m) => m.isEntry)}`);
+  console.log(`dead code:    ${count((m) => m.isDead)}`);
+  console.log(`in a cycle:   ${count((m) => m.inCycle)}`);
+  console.log(`\nmost changed:`);
+  for (const module of mostChanged) {
+    console.log(`  ${String(module.churn).padStart(3)} commits  ${module.id}`);
+  }
 }
