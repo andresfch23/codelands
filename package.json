@@ -1,4 +1,6 @@
 {
+  "type": "module",
+  "name": "codelands",
   "devDependencies": {
     "@types/node": "^26.6.6",
     "tsx": "^4.23.15",
